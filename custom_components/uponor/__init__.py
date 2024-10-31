@@ -1,5 +1,8 @@
+from datetime import datetime, timedelta
 import math
 import logging
+import os
+import json
 
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
@@ -35,7 +38,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.CLIMATE, Platform.SWITCH]
+PLATFORMS = [Platform.SWITCH, Platform.SENSOR, Platform.CLIMATE]
 
 async def async_setup(hass: HomeAssistant, config: dict):
     hass.data.setdefault(DOMAIN, {})
@@ -49,11 +52,13 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry):
 
     state_proxy = await hass.async_add_executor_job(lambda: UponorStateProxy(hass, host, store))
     await state_proxy.async_update()
+    controllers = state_proxy.get_active_controllers()
     thermostats = state_proxy.get_active_thermostats()
 
     hass.data[DOMAIN] = {
         "state_proxy": state_proxy,
-        "thermostats": thermostats
+        "thermostats": thermostats,
+        "controllers": controllers
     }
 
     def handle_set_variable(call):
@@ -79,7 +84,7 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
 async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     _LOGGER.debug("Unloading setup entry: %s, data: %s, options: %s", config_entry.entry_id, config_entry.data, config_entry.options)
-    unload_ok = await hass.config_entries.async_unload_platforms(config_entry, [Platform.SWITCH, Platform.CLIMATE])
+    unload_ok = await hass.config_entries.async_unload_platforms(config_entry, PLATFORMS)
     return unload_ok
 
 class UponorStateProxy:
@@ -90,6 +95,69 @@ class UponorStateProxy:
         self._data = {}
         self._storage_data = {}
         self.next_sp_from_dt = None
+
+    # Common config
+    def get_sw_Ver(self):
+        var = 'cust_SW_version_update'
+        if var in self._data:
+            return self._data[var].split('_')[0]
+        return '-'    
+    
+    # Controlers config        
+    def get_active_controllers(self):
+        active = []
+        for c in range(1, 5):
+            var = 'sys_controller_' + str(c) + '_presence'
+            if var in self._data and self._data[var] == "1":
+                active.append('C' + str(c))
+        return active  
+        
+    def get_controller_id(self, controller):
+        var = controller.replace('C', 'controller') + '_id'
+        if var in self._data:
+            return self._data[var]
+        
+    def get_controller_via_id(self, controller):
+        if controller[1] == "1" :
+            return "c"
+        else:
+            return self.get_controller_id("C1")
+
+    def get_controller_hardware(self, controller):
+        var = controller + '_hardware_type'
+        if var in self._data and self._data[var] == "0" :
+            return self.get_sw_Ver()
+        return self._data[var]
+
+    def get_controller_name(self, controller):
+        var = 'cust_' + controller.replace('C','Controller') + '_Name'
+        if var in self._data:
+            return self._data[var]
+        return controller
+        
+    def get_controller_version(self, controller):
+        var = controller + '_sw_version'
+        if var in self._data:
+            hexver = hex(int(self._data[var])).replace('0x','')
+            return hexver[:-2] + '.' + hexver[-2:]
+
+    def get_controller_room_avgtemp(self, controller):
+        var = controller + '_average_room_temperature'
+        if var in self._data:
+            return round((int(self._data[var]) - 320) / 18, 1)
+
+    def get_controller_relay(self, controller):
+        var = controller.replace('C', 'controller') + '_controller_relays_config'
+        if var in self._data:
+            match self._data[var]:
+                case "1":
+                    return "Not in user"
+                case "3":
+                    return "Pump / Heater"
+                case "4":
+                    return "Pump / Eco /Komfort"
+                case "7":
+                    return "Not configured"
 
     # Thermostats config
 
@@ -116,16 +184,29 @@ class UponorStateProxy:
         if var in self._data:
             return self._data[var]
 
-    def get_model(self):
-        var = 'cust_SW_version_update'
-        if var in self._data:
-            return self._data[var].split('_')[0]
-        return '-'
+    def get_model(self, thermostat):
+        var = thermostat + '_thermostat_type'
+        if var in self._data and self._data[var] == "0":
+            match self.get_thermostat_id(thermostat)[3]:
+                case "1":
+                    return "T144"
+                case "2":
+                    return "T145"
+                case _:
+                    return "T143"
+        return "T143"
+    
+    def get_model_text(self,thermostat):
+        match int(get_model(themostat)):
+            case "T144":
+                return MODEL_T144
+            case "T145":
+                return MODEL_T145
 
     def get_version(self, thermostat):
-        var = thermostat[0:3] + 'sw_version'
+        var = thermostat + '_sw_version'
         if var in self._data:
-            return self._data[var].split('_')[0]
+            return hex(int(self._data[var])).replace("0x","")
 
     # Temperatures & humidity
 
@@ -148,6 +229,19 @@ class UponorStateProxy:
         var = thermostat + '_rh'
         if var in self._data and int(self._data[var]) >= TOO_LOW_HUMIDITY_LIMIT:
             return int(self._data[var])
+
+    def has_humidity_sensor(self, thermostat):
+        var = thermostat + '_rh'
+        return var in self._data and int(self._data[var]) != 0
+    
+    def has_externaltemp(self, thermostat):
+        var = thermostat + '_external_temperature'
+        return var in self._data and int(self._data[var]) != 32767
+
+    def get_externaltemp(self, thermostat):
+        var = thermostat + '_external_temperature'
+        if var in self._data:
+            return round((int(self._data[var]) - 320) / 18, 1)
 
     # Temperature setpoint
 
@@ -291,7 +385,7 @@ class UponorStateProxy:
     def get_last_update(self):
         return self.next_sp_from_dt
     
-    def call_state_update(self):
+    async def call_state_update(self):
         async_dispatcher_send(self._hass, SIGNAL_UPONOR_STATE_UPDATE)
 
     # Rest
@@ -314,4 +408,27 @@ class UponorStateProxy:
         setpoint = int(temp * 18 + self.get_active_setback(thermostat, temp) + 320)
         await self._hass.async_add_executor_job(lambda: self._client.send_data({var: setpoint}))
         self._data[var] = setpoint
+        self._hass.async_create_task(self.call_state_update())
+
+    def get_local_override(self, thermostat):
+        var = thermostat + '_pub_setpoint_override'
+        return var in self._data and int(self._data[var]) != 0
+
+
+    async def async_local_override(self, thermostat, override):
+        var = thermostat + '_pub_setpoint_override'
+        data = "1" if override else "0"
+        await self._hass.async_add_executor_job(lambda: self._client.send_data({var: data}))
+        self._data[var] = data
+        self._hass.async_create_task(self.call_state_update())
+
+    def is_autoupdate(self):
+        var = 'cust_Enable_SW_Update'
+        return var in self._data and self._data[var] == "1"        
+
+    async def async_set_autoupdate(self, set_on):
+        var = 'cust_Enable_SW_Update'
+        data = "1" if set_on else "0"
+        await self._hass.async_add_executor_job(lambda: self._client.send_data({var: data}))
+        self._data[var] = data
         self._hass.async_create_task(self.call_state_update())

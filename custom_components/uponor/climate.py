@@ -35,7 +35,14 @@ async def async_setup_entry(hass, entry, async_add_entities):
             name = entry.data[thermostat.lower()]
         else:
             name = state_proxy.get_room_name(thermostat)
-        entities.append(UponorClimate(state_proxy, thermostat, name))
+        match state_proxy.get_model(thermostat):
+            case "T144", "T145":
+                entities.append(UponorClimate(state_proxy, thermostat, name))
+            case _:
+                if state_proxy.has_humidity_sensor(thermostat):
+                    entities.append(UponorClimate_hum(state_proxy, thermostat, name))
+                else:
+                    entities.append(UponorClimate(state_proxy, thermostat, name))
     if entities:
         async_add_entities(entities, update_before_add=False)
 
@@ -58,8 +65,10 @@ class UponorClimate(ClimateEntity):
             "identifiers": {(DOMAIN, self._state_proxy.get_thermostat_id(self._thermostat))},
             "name": self._name,
             "manufacturer": DEVICE_MANUFACTURER,
-            "model": self._state_proxy.get_model(),
-            "sw_version": self._state_proxy.get_version(self._thermostat)
+            "model": self._state_proxy.get_model(self._thermostat),
+            "sw_version": self._state_proxy.get_version(self._thermostat),
+            "serial_number": self._state_proxy.get_thermostat_id(self._thermostat),            
+            "via_device" : (DOMAIN,self._state_proxy.get_controller_id(self._thermostat[:2]))
         }
 
     @property
@@ -92,22 +101,34 @@ class UponorClimate(ClimateEntity):
 
     @property
     def supported_features(self):
-        return ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE | ClimateEntityFeature.TURN_OFF | ClimateEntityFeature.TURN_ON
-        
+        return ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
+
     @property
     def hvac_modes(self):
         if self._state_proxy.is_cool_enabled():
             return [HVACMode.COOL, HVACMode.OFF]
-        return [HVACMode.HEAT, HVACMode.OFF]
-    
+        return [HVACMode.HEAT]
+
+    @property
+    def hvac_mode(self):
+        if not self._is_on:
+            return HVACMode.OFF
+        if self._state_proxy.is_cool_enabled():
+            return HVACMode.COOL
+        return HVACMode.HEAT
+
+    @property
+    def hvac_action(self):
+        if not self._is_on:
+            return HVACAction.OFF
+        if self._state_proxy.is_active(self._thermostat):
+            return HVACAction.COOLING if self._state_proxy.is_cool_enabled() else HVACAction.HEATING
+        return HVACAction.IDLE
+
     @property
     def preset_modes(self):
         return [self.preset_mode] if self.preset_mode is not None else []
-    
-    @property
-    def current_humidity(self):
-        return self._state_proxy.get_humidity(self._thermostat)
-    
+       
     @property
     def current_temperature(self):
         return self._state_proxy.get_temperature(self._thermostat)
@@ -117,11 +138,11 @@ class UponorClimate(ClimateEntity):
         return self._state_proxy.get_setpoint(self._thermostat)
 
     @property
-    def min_temp(self):
+    def target_temperature_low(self):
         return self._state_proxy.get_min_limit(self._thermostat)
 
     @property
-    def max_temp(self):
+    def target_temperature_high(self):
         return self._state_proxy.get_max_limit(self._thermostat)
     
     @property
@@ -142,43 +163,17 @@ class UponorClimate(ClimateEntity):
             return PRESET_AWAY
         return None
     
-    @property
-    def hvac_mode(self):
-        if not self._is_on:
-            return HVACMode.OFF
-        if self._state_proxy.is_cool_enabled():
-            return HVACMode.COOL
-        return HVACMode.HEAT
+
+class UponorClimate_hum(UponorClimate):
 
     @property
-    def hvac_action(self):
-        if not self._is_on:
-            return HVACAction.OFF
-        if self._state_proxy.is_active(self._thermostat):
-            return HVACAction.COOLING if self._state_proxy.is_cool_enabled() else HVACAction.HEATING
-        return HVACAction.IDLE
-    
-    async def async_turn_off(self):
-        if self._is_on:
-            await self._state_proxy.async_turn_off(self._thermostat)
-            self._is_on = False
+    def supported_features(self):
+        return ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE | ClimateEntityFeature.TARGET_HUMIDITY
 
-    async def async_turn_on(self):
-        if not self._is_on:
-            await self._state_proxy.async_turn_on(self._thermostat)
-            self._is_on = True
+    @property
+    def current_humidity(self):
+        return self._state_proxy.get_humidity(self._thermostat)
 
-    async def async_set_hvac_mode(self, hvac_mode):
-        if hvac_mode == HVACMode.OFF and self._is_on:
-            await self._state_proxy.async_turn_off(self._thermostat)
-            self._is_on = False
-        if (hvac_mode == HVACMode.HEAT or hvac_mode == HVACMode.COOL) and not self._is_on:
-            await self._state_proxy.async_turn_on(self._thermostat)
-            self._is_on = True
 
-    async def async_set_temperature(self, **kwargs):
-        if kwargs.get(ATTR_TEMPERATURE) is None:
-            return
-        await self._state_proxy.set_setpoint(self._thermostat, kwargs.get(ATTR_TEMPERATURE))
 
 

@@ -67,19 +67,22 @@ class DomainConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def get_rooms_schema(self):
         rooms_schema = {}
         for t in self.get_active_thermostats():
-            rooms_schema[vol.Optional(t.lower(), default=self.get_room_name(t))] = str
+            if len(t) > 2:
+                rooms_schema[vol.Optional(t.lower(), default=self.get_room_name(t))] = str
+            else:
+                rooms_schema[vol.Optional(t.lower(), default=self.get_controller_name(t))] = str
         return vol.Schema(rooms_schema)
 
     def get_active_thermostats(self):
         active = []
         for c in range(1, 5):
             var = 'sys_controller_' + str(c) + '_presence'
-            if var in self._api_response and self._api_response[var] != "1":
-                continue
-            for i in range(1, 13):
-                var = 'C' + str(c) + '_thermostat_' + str(i) + '_presence'
-                if var in self._api_response and self._api_response[var] == "1":
-                    active.append('C' + str(c) + '_T' + str(i))
+            if var in self._api_response and self._api_response[var] == "1":
+                active.append('C'+str(c))
+                for i in range(1, 13):
+                    var = 'C' + str(c) + '_thermostat_' + str(i) + '_presence'
+                    if var in self._api_response and self._api_response[var] == "1":
+                        active.append('C' + str(c) + '_T' + str(i))
         return active
 
     def get_room_name(self, thermostat):
@@ -87,3 +90,9 @@ class DomainConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if var in self._api_response:
             return self._api_response[var]
         return thermostat
+        
+    def get_controller_name(self, controller):
+        var = 'cust_' + controller.replace('C', 'Controller') + '_Name'
+        if var in self._api_response:
+            return self._api_response[var]
+        return controller
