@@ -4,6 +4,10 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass,
 from homeassistant.core import callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
+from homeassistant.const import (
+    ATTR_TEMPERATURE,
+    UnitOfTemperature
+)
 from .const import (
     DOMAIN,
     SIGNAL_UPONOR_STATE_UPDATE,
@@ -31,7 +35,7 @@ class UponorRoomAvg(SensorEntity):
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_suggested_display_precision = None
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_native_unit_of_measurement = '°C'
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
     
     def __init__(self, state_proxy, controller,name):
         self._state_proxy = state_proxy

@@ -33,7 +33,9 @@ from .const import (
     STATUS_ERROR_TOO_HIGH_TEMP,
     TOO_HIGH_TEMP_LIMIT,
     TOO_LOW_HUMIDITY_LIMIT,
-    DEFAULT_TEMP
+    DEFAULT_TEMP,
+    MODEL_T145,
+    MODEL_T144
 )
 
 _LOGGER = logging.getLogger(__name__)
